@@ -1,213 +1,163 @@
-#!/usr/bin/env python3
 """
-VULNERABLE TEST TARGET SIMULATOR
-================================
-This creates a local web server with INTENTIONAL vulnerabilities
-for testing the scanner. DO NOT USE IN PRODUCTION.
-
-Contains:
-- SQL Injection in login form
-- SQL Injection in URL parameters
-- Exposed sensitive files
-- Missing security headers
+INTENTIONALLY VULNERABLE TEST TARGET (Flask)
+DO NOT DEPLOY TO PRODUCTION - FOR TESTING ONLY!
+Contains multiple vulnerabilities for scanner verification.
 """
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-import json
-import re
+from flask import Flask, request, jsonify, render_template_string, make_response
+import sqlite3
+import os
 
-# Simulated Database
-USERS_DB = [
-    {"id": 1, "username": "admin", "password": "securepass123", "role": "administrator"},
-    {"id": 2, "username": "user1", "password": "userpass456", "role": "user"},
-    {"id": 3, "username": "test", "password": "test123", "role": "user"}
-]
+app = Flask(__name__)
 
-class VulnerableHandler(BaseHTTPRequestHandler):
+# Initialize vulnerable database
+def init_db():
+    conn = sqlite3.connect('vulnerable.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)''')
+    # Insert default admin credentials
+    c.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES ('admin', 'securepass123', 'admin')")
+    c.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES ('user', 'password123', 'user')")
+    conn.commit()
+    conn.close()
+
+# VULNERABLE: SQL Injection in login
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        
+        # INTENTIONAL VULNERABILITY: String concatenation
+        conn = sqlite3.connect('vulnerable.db')
+        c = conn.cursor()
+        query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
+        try:
+            c.execute(query)
+            user = c.fetchone()
+            conn.close()
+            
+            if user:
+                resp = make_response(render_template_string("""
+                    <html><body>
+                    <h1>Login Successful!</h1>
+                    <p>Welcome, {{ username }}!</p>
+                    <p>Your role: {{ role }}</p>
+                    <p>Dashboard access granted.</p>
+                    </body></html>
+                """, username=user[1], role=user[3]))
+                resp.set_cookie('session', 'authenticated_session_12345')
+                return resp
+            else:
+                return "Invalid credentials", 401
+        except Exception as e:
+            # VULNERABILITY: Error message disclosure
+            return f"Database Error: {str(e)}", 500
     
-    def do_GET(self):
-        parsed_path = urlparse(self.path)
-        query_params = parse_qs(parsed_path.query)
-        
-        # Intentionally missing security headers
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html')
-        # NOTE: No X-Frame-Options, No CSP, No HSTS (intentional)
-        self.end_headers()
-        
-        # VULNERABLE ENDPOINT: Search with SQLi
-        if parsed_path.path == '/search':
-            keyword = query_params.get('q', [''])[0]
-            
-            # VULNERABLE: Direct string concatenation (simulated SQLi)
-            if "'" in keyword or "OR" in keyword or "UNION" in keyword:
-                # Simulate SQL Error
-                response = f"""
-                <html><body>
-                <h1>Search Results</h1>
-                <div style="color:red; font-family:monospace;">
-                MySQL Error: You have an error in your SQL syntax near '{keyword}' at line 1
-                </div>
-                </body></html>
-                """
-                self.wfile.write(response.encode())
-                return
-            
-            response = f"<html><body><h1>Search for: {keyword}</h1><p>No results found.</p></body></html>"
-            self.wfile.write(response.encode())
-            return
-        
-        # VULNERABLE ENDPOINT: User Profile
-        if parsed_path.path == '/user':
-            user_id = query_params.get('id', ['1'])[0]
-            
-            # Simulate Time-based blind SQLi detection
-            if "SLEEP" in user_id or "WAITFOR" in user_id:
-                import time
-                time.sleep(5)  # Simulate delay
-                response = "<html><body><h1>User Profile</h1><p>Loading...</p></body></html>"
-                self.wfile.write(response.encode())
-                return
-            
-            # Normal response
-            response = f"""
-            <html><body>
-            <h1>User Profile</h1>
-            <p>User ID: {user_id}</p>
-            <p>Username: admin</p>
-            <p>Email: admin@example.com</p>
-            </body></html>
-            """
-            self.wfile.write(response.encode())
-            return
-        
-        # SENSITIVE FILE: Exposed .env
-        if parsed_path.path == '/.env':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            response = """
-DB_HOST=localhost
-DB_USER=root
-DB_PASSWORD=SuperSecretDBPass123!
-API_KEY=sk-1234567890abcdef
-ADMIN_EMAIL=admin@company.com
-            """
-            self.wfile.write(response.encode())
-            return
-        
-        # SENSITIVE FILE: Git Config
-        if parsed_path.path == '/.git/config':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            response = """
-[core]
-    repositoryformatversion = 0
-[remote "origin"]
-    url = https://github.com/company/internal-repo.git
-            """
-            self.wfile.write(response.encode())
-            return
-        
-        # DEFAULT: Login Page with Form
-        login_form = """
-        <html>
-        <head><title>Vulnerable Login</title></head>
-        <body>
-        <h1>Welcome to Vulnerable App</h1>
-        <form action="/login" method="POST">
-            <label>Username:</label><br>
-            <input type="text" name="username"><br>
-            <label>Password:</label><br>
-            <input type="password" name="password"><br><br>
+    # Login form
+    return render_template_string("""
+        <html><body>
+        <h1>Vulnerable Login</h1>
+        <form method="POST" action="/login">
+            <input type="text" name="username" placeholder="Username"><br><br>
+            <input type="password" name="password" placeholder="Password"><br><br>
             <input type="submit" value="Login">
         </form>
-        <p><a href="/search?q=test">Search</a> | <a href="/user?id=1">Profile</a></p>
-        <p><a href="/.env">Config</a> (oops, exposed!)</p>
+        </body></html>
+    """)
+
+# VULNERABLE: SQL Injection in search
+@app.route('/search')
+def search():
+    query = request.args.get('q', '')
+    if not query:
+        return "Use ?q=search_term to search users"
+    
+    conn = sqlite3.connect('vulnerable.db')
+    c = conn.cursor()
+    # INTENTIONAL VULNERABILITY
+    sql_query = f"SELECT username, role FROM users WHERE username LIKE '%{query}%'"
+    try:
+        c.execute(sql_query)
+        results = c.fetchall()
+        conn.close()
+        return jsonify({"results": results})
+    except Exception as e:
+        # VULNERABILITY: Detailed error
+        return jsonify({"error": str(e), "query": sql_query}), 500
+
+# VULNERABLE: Exposed .env file
+@app.route('/.env')
+def env_file():
+    return """
+DATABASE_URL=sqlite:///vulnerable.db
+DB_PASSWORD=SuperSecretDBPass123!
+API_KEY=sk-1234567890abcdef
+SECRET_KEY=super_secret_key_do_not_share
+ADMIN_EMAIL=admin@vulnerable-site.com
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+"""
+
+# VULNERABLE: GraphQL endpoint with introspection
+@app.route('/graphql', methods=['POST'])
+def graphql():
+    data = request.get_json()
+    query = data.get('query', '')
+    
+    # Simple GraphQL-like parser (vulnerable to batch attacks)
+    if '__schema' in query:
+        return jsonify({
+            "data": {
+                "__schema": {
+                    "types": [
+                        {"name": "User", "fields": [{"name": "id"}, {"name": "username"}, {"name": "password"}]},
+                        {"name": "Query", "fields": [{"name": "user"}, {"name": "users"}]}
+                    ]
+                }
+            }
+        })
+    
+    if '__typename' in query:
+        return jsonify({"data": {"__typename": "Query"}})
+    
+    return jsonify({"error": "Unsupported query"})
+
+# VULNERABLE: Path traversal
+@app.route('/files')
+def files():
+    filename = request.args.get('name', 'index.html')
+    # INTENTIONAL VULNERABILITY: No sanitization
+    try:
+        with open(filename, 'r') as f:
+            return f.read()
+    except Exception as e:
+        return f"Error: {str(e)}", 500
+
+# Home page with tech fingerprints
+@app.route('/')
+def home():
+    return render_template_string("""
+        <html>
+        <head><title>Vulnerable Test Site</title></head>
+        <body>
+        <h1>AEGIS-2026 Test Target</h1>
+        <p>This site is intentionally vulnerable for testing purposes.</p>
+        <ul>
+            <li><a href="/login">Login Page (SQLi)</a></li>
+            <li><a href="/search?q=admin">Search Users (SQLi)</a></li>
+            <li><a href="/.env">Exposed .env</a></li>
+            <li><a href="/graphql">GraphQL Endpoint</a></li>
+        </ul>
+        <!-- Built with Flask + SQLite -->
+        <!-- Technologies: Python, Flask, SQLite, Next.js (fake), React (fake) -->
         </body>
         </html>
-        """
-        self.wfile.write(login_form.encode())
-    
-    def do_POST(self):
-        parsed_path = urlparse(self.path)
-        
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length).decode('utf-8')
-        params = parse_qs(post_data)
-        
-        username = params.get('username', [''])[0]
-        password = params.get('password', [''])[0]
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-        
-        # VULNERABLE LOGIN: SQL Injection Bypass
-        # Check for classic SQLi bypass patterns
-        if ("' OR '1'='1" in username) or ("' OR 1=1" in username) or ("admin'--" in username):
-            # Authentication Bypass Successful
-            response = """
-            <html><body style="background-color:#d4edda;">
-            <h1>LOGIN SUCCESSFUL!</h1>
-            <h2>Welcome, Administrator!</h2>
-            <p>You have bypassed authentication.</p>
-            <div style="border:1px solid red; padding:10px; background:#fff;">
-            <h3>CREDENTIALS EXTRACTED VIA SQLi:</h3>
-            <p><strong>Username:</strong> admin</p>
-            <p><strong>Password:</strong> securepass123</p>
-            <p><strong>Role:</strong> administrator</p>
-            </div>
-            <p><a href="/">Back to Login</a></p>
-            </body></html>
-            """
-            self.wfile.write(response.encode())
-            return
-        
-        # Normal authentication check
-        user_found = None
-        for user in USERS_DB:
-            if user['username'] == username and user['password'] == password:
-                user_found = user
-                break
-        
-        if user_found:
-            response = f"""
-            <html><body style="background-color:#d4edda;">
-            <h1>Login Successful</h1>
-            <p>Welcome, {user_found['username']}!</p>
-            </body></html>
-            """
-        else:
-            response = """
-            <html><body style="background-color:#f8d7da;">
-            <h1>Login Failed</h1>
-            <p>Invalid username or password.</p>
-            <p><a href="/">Try Again</a></p>
-            </body></html>
-            """
-        
-        self.wfile.write(response.encode())
-    
-    def log_message(self, format, *args):
-        # Suppress default logging for cleaner output
-        pass
+    """)
 
-def run_server(port=8080):
-    server_address = ('', port)
-    httpd = HTTPServer(server_address, VulnerableHandler)
-    print(f"\n[+] VULNERABLE TEST SERVER STARTED")
-    print(f"[+] Running on http://localhost:{port}")
-    print(f"[+] Intentional Vulnerabilities:")
-    print(f"    - SQL Injection in /search?q=")
-    print(f"    - SQL Injection in /user?id=")
-    print(f"    - Auth Bypass in /login (POST)")
-    print(f"    - Exposed /.env and /.git/config")
-    print(f"    - Missing Security Headers")
-    print(f"\n[*] Waiting for scanner connections...\n")
-    httpd.serve_forever()
-
-if __name__ == "__main__":
-    run_server()
+if __name__ == '__main__':
+    init_db()
+    print("[*] Starting vulnerable test server on http://localhost:8080")
+    print("[!] WARNING: This server is intentionally vulnerable!")
+    app.run(host='0.0.0.0', port=8080, debug=True)

@@ -1,0 +1,44 @@
+{
+    "target": "http://localhost:8080",
+    "scan_date": "2026-04-18T13:51:14.388835",
+    "phase1_discovery": {
+        "error": "unterminated character set at position 12"
+    },
+    "phase2_analysis": {
+        "header_issues": [
+            "Missing Header: Strict-Transport-Security",
+            "Missing Header: Content-Security-Policy",
+            "Missing Header: X-Frame-Options",
+            "Missing Header: X-Content-Type-Options",
+            "Missing Header: X-XSS-Protection",
+            "Missing Header: Permissions-Policy",
+            "Missing Header: Access-Control-Allow-Origin"
+        ],
+        "pages_visited": 4,
+        "forms_locations": [
+            {
+                "url": "http://localhost:8080",
+                "count": 1
+            }
+        ]
+    },
+    "phase3_vulnerabilities": [
+        {
+            "type": "Authentication Bypass (Likely SQLi)",
+            "url": "http://localhost:8080/login",
+            "field": "username",
+            "evidence": "Login success indicators detected after injection",
+            "simulated_creds": {
+                "username": "admin",
+                "status": "Bypassed"
+            }
+        }
+    ],
+    "summary": {
+        "total_vulnerabilities": 1,
+        "critical_findings": 1,
+        "open_ports_count": 0,
+        "technologies_detected": 0,
+        "status": "COMPLETED"
+    }
+}

