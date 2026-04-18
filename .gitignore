@@ -10,32 +10,40 @@
 *.env.*
 
 # Coverage reports
-.coverage
 coverage/
 htmlcov/
+.coverage
 
-# Python
+# Python specific
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-env/
-venv/
-.venv/
-.venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage*
-.nox/
+*.so
+*.egg-info/
+.eggs/
+
+# Build and distribution artifacts
+dist/
+build/
+*.egg
+*.whl
+*.tar.gz
+*.zip
+
+# Testing
 .pytest_cache/
 .mypy_cache/
+.hypothesis/
 
-# Database
-*.db
-*.db-journal
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Reports
-scan_report.json
+# OS generated files
+.DS_Store
+Thumbs.db
 ```

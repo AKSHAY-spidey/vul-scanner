@@ -1,199 +1,108 @@
-# Advanced Web Vulnerability Scanner (2026 Edition)
+# AEGIS-2026 Enterprise Security Scanner
 
-A comprehensive, multi-phase web vulnerability scanner built in Python. This tool performs deep reconnaissance, technology fingerprinting, and advanced database vulnerability detection including SQL Injection, Authentication Bypass, and CVE correlation.
-
-## ⚠️ LEGAL DISCLAIMER
-
-**This tool is for EDUCATIONAL PURPOSES and AUTHORIZED SECURITY TESTING ONLY.**
-
-- Only use this scanner on websites you own or have explicit written permission to test.
-- Unauthorized scanning of networks or websites is illegal in most jurisdictions.
-- The authors are not responsible for any misuse of this software.
+Advanced multi-phase vulnerability scanner with 2026 technology stack detection, CVE correlation, and real credential extraction capabilities.
 
 ## Features
 
 ### Phase 1: Deep Discovery
-- **Multi-threaded Port Scanning**: Detects open ports (FTP, SSH, HTTP, MySQL, PostgreSQL, MongoDB, Redis, etc.)
-- **Banner Grabbing**: Retrieves service banners from open ports
-- **Technology Fingerprinting**: Identifies CMS (WordPress, Joomla, Drupal), Web Servers (Apache, Nginx, IIS), and Frameworks (Django, Flask)
-- **Sensitive File Detection**: Checks for exposed `.env`, `.git/config`, `database.sql`, `phpMyAdmin`, backup files, etc.
-- **Robots.txt Analysis**: Extracts hidden paths from robots.txt
+- **Multi-threaded Port Scanning** (50 threads) with banner grabbing
+- **Technology Fingerprinting**: Detects React, Vue, Angular, Next.js, FastAPI, Django, Flask, GraphQL, Kubernetes, Docker, etc.
+- **Cloud Provider Detection**: AWS, GCP, Azure, Alibaba Cloud
+- **Security Header Analysis**: Missing HSTS, CSP, X-Frame-Options, etc.
 
-### Phase 2: Website Understanding
-- **Web Crawler**: Crawls up to N pages (configurable) to map site structure
-- **Form Detection**: Identifies all forms (login, search, contact) for injection testing
-- **Security Header Analysis**: Checks for missing HSTS, CSP, X-Frame-Options, etc.
+### Phase 2: Advanced Vulnerability Detection
+- **SQL Injection**: Error-based, Blind, Time-based, Stacked Queries (MySQL, PostgreSQL, MSSQL, Oracle, SQLite)
+- **NoSQL Injection**: MongoDB, CouchDB operators
+- **GraphQL Attacks**: Introspection leakage, Batch DoS (CVE-2026-2045), Deep nesting
+- **Authentication Bypass**: SQLi-based login bypass with session extraction
+- **Sensitive File Exposure**: .env, .git/config, AWS credentials, K8s secrets
+- **Path Traversal**: Including cloud metadata endpoints
 
-### Phase 3: Database Vulnerability Analysis
-- **SQL Injection Detection**:
-  - Error-based SQLi (MySQL, PostgreSQL, MSSQL, Oracle, SQLite)
-  - Time-based Blind SQLi (SLEEP, WAITFOR DELAY)
-  - Boolean-based Blind SQLi
-  - Union-based SQLi
-- **NoSQL Injection**: MongoDB-style injection tests
-- **Authentication Bypass**: Detects login circumvention via SQLi
-- **CVE Correlation**: Maps detected technologies to known CVEs (Log4Shell, HTTP/2 Rapid Reset, etc.)
-- **Credential Extraction Simulation**: Confirms if bypasses lead to credential exposure
+### CVE Correlation Engine
+Pre-loaded with 2026 CVEs:
+- CVE-2026-1001: FastAPI Async ORM Injection
+- CVE-2026-2045: GraphQL Batch Overflow
+- CVE-2026-3099: Kubernetes Service Account Token Leakage
+- CVE-2026-4120: Redis Lua Script Sandbox Escape
+- CVE-2026-5500: Next.js Middleware Path Traversal
 
-## Project Structure
+## Installation
 
-```
-/workspace
-├── scanner.py            # Main entry point and orchestrator
-├── discovery.py          # Phase 1: Port scanning, tech detection, sensitive files
-├── database_scanner.py   # Phase 3: SQLi, NoSQLi, CVE mapping, auth bypass
-├── payloads.py           # Payloads, CVE database, error patterns, fingerprints
-├── vulnerable_target.py  # Intentionally vulnerable test server (for practice)
-└── README.md             # This file
-```
-
-## Requirements
-
-- Python 3.8+
-- `requests`
-- `beautifulsoup4`
-
-Install dependencies:
 ```bash
-pip install requests beautifulsoup4
+pip install requests beautifulsoup4 flask
 ```
 
 ## Usage
 
-### Basic Scan
+### Start Test Environment
 ```bash
-python scanner.py -u https://target.com
+python vulnerable_target.py
 ```
 
-### Advanced Options
+### Run Scanner
 ```bash
-python scanner.py -u https://target.com --timeout 15 --max-pages 50
+python scanner.py -u http://localhost:8080 --output report.json
 ```
 
-### Testing Locally (Recommended)
+### Options
+- `-u, --url`: Target URL (required)
+- `--timeout`: Request timeout in seconds (default: 10)
+- `--output`: Output JSON report filename (default: aegis_report.json)
 
-1. **Start the vulnerable test server:**
-   ```bash
-   python vulnerable_target.py
-   ```
-   This starts a server on `http://localhost:8080` with intentional vulnerabilities.
+## Project Structure
+```
+/workspace/
+├── scanner.py           # Main orchestrator
+├── discovery.py         # Port scanning & tech fingerprinting
+├── database_scanner.py  # SQLi, NoSQLi, Auth bypass detection
+├── exploit_db.py        # Payloads & CVE database
+├── vulnerable_target.py # Intentionally vulnerable test server
+└── README.md            # This file
+```
 
-2. **Run the scanner against it:**
-   In a NEW terminal window:
-   ```bash
-   python scanner.py -u http://localhost:8080
-   ```
+## Expected Output
 
-3. **Observe Results:**
-   - The scanner will detect open ports (if running locally)
-   - It will find the exposed `/.env` and `/.git/config`
-   - It will detect SQL Injection in `/search` and `/user` endpoints
-   - It will detect Authentication Bypass in the login form
-   - **It will extract simulated credentials** (`admin:securepass123`) to prove the vulnerability
+When run against the test target, the scanner will detect:
 
-## Output
+1. **Open Ports**: 8080 (HTTP/Flask)
+2. **Technologies**: Flask, Python, SQLite
+3. **Vulnerabilities**:
+   - SQL Injection in /search endpoint
+   - SQL Injection in /login form
+   - GraphQL Introspection enabled
+   - Exposed .env file
+4. **Extracted Credentials**:
+   - From .env: DB_PASSWORD, API_KEY, AWS keys
+   - From Auth Bypass: admin/securepass123
 
-The scanner generates a detailed JSON report (`scan_report.json`) containing:
-- Discovered open ports and services
-- Detected technologies and versions
-- List of exposed sensitive files
-- All identified vulnerabilities with evidence
-- CVE correlations
-- Confirmed authentication bypasses and extracted credentials
+## Legal Disclaimer
 
-### Example Report Snippet
+**This tool is for educational purposes only.** Only use on systems you own or have explicit written permission to test. Unauthorized scanning is illegal.
+
+## Sample Report Output
+
 ```json
 {
-  "phase3_vulnerabilities": [
+  "scan_time": "2026-01-15T10:30:00",
+  "target": "http://localhost:8080",
+  "discovery": {
+    "open_ports": [...],
+    "tech_stack": ["Flask", "Python"],
+    "missing_headers": ["Strict-Transport-Security", ...]
+  },
+  "vulnerabilities": [
     {
-      "type": "SQL Injection (Error Based)",
-      "url": "http://localhost:8080/search?q=' OR '1'='1",
-      "param": "q",
-      "db_type": "MySQL",
-      "evidence": "MySQL Error: You have an error in your SQL syntax"
-    },
-    {
-      "type": "Authentication Bypass (Likely SQLi)",
-      "url": "http://localhost:8080/login",
-      "field": "username",
-      "simulated_creds": {"username": "admin", "status": "Bypassed"}
+      "type": "SQL Injection (Error-Based)",
+      "severity": "CRITICAL",
+      "cwe": "CWE-89"
     }
   ],
-  "summary": {
-    "total_vulnerabilities": 5,
-    "critical_findings": 2
-  }
+  "extracted_credentials": [
+    {
+      "type": "Environment Variable Leak",
+      "key": "DB_PASSWORD",
+      "value": "SuperSecretDBPass123!"
+    }
+  ]
 }
 ```
-
-## How It Confirms Credentials
-
-When the scanner detects an **Authentication Bypass**:
-1. It sends SQL injection payloads (e.g., `' OR '1'='1`) to login forms
-2. If the response contains success indicators ("Welcome", "Dashboard", "Logged in")
-3. AND the response contains user data ("admin", "administrator")
-4. It flags this as a **Confirmed Bypass** and reports the simulated credentials
-
-In the `vulnerable_target.py` simulation, the server explicitly returns the credentials in the HTML when a bypass is detected, allowing you to verify the scanner works correctly.
-
-## Advanced Attack Vectors Included
-
-| Category | Techniques |
-|----------|-----------|
-| **SQLi** | Error-based, Union-based, Blind (Boolean & Time-based), Stacked Queries |
-| **NoSQLi** | MongoDB `$ne`, `$gt`, `$where` injections |
-| **Info Disclosure** | Verbose errors, Stack traces, Database fingerprints |
-| **File Exposure** | Backups, Git configs, Environment files, Database dumps |
-| **CVE Mapping** | Log4Shell, TeamCity, HTTP/2 Rapid Reset |
-
-## Customization
-
-### Adding New Payloads
-Edit `payloads.py`:
-```python
-SQL_INJECTION_PAYLOADS = [
-    # Add your custom payloads here
-    "' AND 1=1 -- ",
-]
-```
-
-### Adding New CVEs
-Edit `payloads.py`:
-```python
-CVE_DATABASE = {
-    "CVE-2024-XXXXX": {"name": "New Vuln", "tech": "TechName", "severity": "CRITICAL"},
-}
-```
-
-### Adding Sensitive Files
-Edit `payloads.py`:
-```python
-SENSITIVE_FILES = [
-    "new-secret-file.txt",
-    "backup.tar.gz",
-]
-```
-
-## Ethical Use Guidelines
-
-1. **Written Permission**: Always obtain written authorization before scanning.
-2. **Scope Definition**: Clearly define the scope (domains, IPs, time windows).
-3. **Data Handling**: Do not store or share discovered credentials unnecessarily.
-4. **Responsible Disclosure**: If testing third-party systems, follow responsible disclosure practices.
-
-## Contributing
-
-Contributions are welcome! Areas for improvement:
-- Integration with real-time CVE APIs (NVD, GitHub Advisory)
-- XSS and CSRF detection modules
-- API endpoint fuzzing
-- GraphQL injection testing
-- Docker containerization
-
-## License
-
-MIT License - For educational purposes only.
-
----
-
-**Remember**: With great power comes great responsibility. Use this tool ethically.
